@@ -211,6 +211,7 @@ server.listen(PORT, '127.0.0.1', async () => {
   console.log(`  👉 브라우저에서 http://localhost:${PORT} 을 여세요`);
   if (process.env.MOCK === '1') console.log('  🧪 연습 모드 (MOCK=1): 실제 생성·게시·과금 없음');
   if (bot) console.log(`  🤖 텔레그램 봇 @${bot.username} 연결됨${bot.chats ? ` (허용 채팅방 ${bot.chats}개)` : ' — 봇에게 /start 를 보내 chat id 를 확인하세요'}`);
+  if (bot) console.log(bot.claude ? '  🧠 Claude 연결됨 — 텔레그램에서 대화·사진 정리 가능' : '  ⚪ Claude 꺼짐 (.env 에 OPENROUTER_API_KEY 를 넣으면 켜져요)');
   console.log('  종료: Ctrl + C');
   console.log('');
 });
