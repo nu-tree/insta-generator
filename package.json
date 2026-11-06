@@ -1,0 +1,22 @@
+{
+  "name": "insta-generator",
+  "version": "1.1.0",
+  "description": "이미지 한 장 → 5초 영상(힉스필드) → 인스타그램 릴스 게시 + 팀 영상 합치기",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "setup": "npm install --no-audit --no-fund",
+    "start": "node server.mjs",
+    "mock": "node server.mjs --mock"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "allowScripts": {
+    "ffmpeg-static": true
+  }
+}

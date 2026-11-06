@@ -1,0 +1,14 @@
+# 기본: git 이 줄바꿈을 자동 처리
+* text=auto
+
+# Windows 실행 파일은 항상 CRLF (LF 면 cmd 에서 오작동할 수 있음)
+*.bat text eol=crlf
+
+# Mac/Linux 실행 파일은 항상 LF
+*.command text eol=lf
+*.sh text eol=lf
+
+# 바이너리
+*.mp4 binary
+*.png binary
+*.jpg binary

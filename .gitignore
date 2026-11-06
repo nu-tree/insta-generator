@@ -1,0 +1,25 @@
+# ── 비밀 정보 (API 키·토큰) — 절대 올리지 않기 ──
+.env
+.env.*
+!.env.example
+
+# ── 의존성 (npm install 로 다시 받음) ──
+node_modules/
+
+# ── 만든 영상·작업 기록 (개인 결과물) ──
+outputs/
+logs/
+*.mp4
+*.mov
+
+# ── 로그 ──
+*.log
+npm-debug.log*
+
+# ── OS · 에디터 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
