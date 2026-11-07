@@ -140,18 +140,65 @@ const server = http.createServer(async (req, res) => {
 
     // 합치기 시작
     if (req.method === 'POST' && p === '/api/team/merge') {
-      const { clips, aspect, fade } = JSON.parse((await readBody(req, 64 * 1024)).toString() || '{}');
-      if (!Array.isArray(clips) || clips.length < 2) return json(res, 400, { error: '합칠 클립을 2개 이상 고르세요.' });
+      let body;
+      try {
+        body = JSON.parse((await readBody(req, 64 * 1024)).toString() || '{}');
+      } catch (e) {
+        return json(res, 400, { error: 'JSON 파싱 실패: ' + e.message });
+      }
+
+      const { clips, aspect, fade } = body;
+
+      if (!Array.isArray(clips)) {
+        return json(res, 400, { error: `clips는 배열이어야 합니다. 받은 타입: ${typeof clips}` });
+      }
+      if (clips.length < 2) return json(res, 400, { error: '합칠 클립을 2개 이상 고르세요.' });
       if (clips.length > 100) return json(res, 400, { error: '클립은 100개까지 합칠 수 있습니다.' });
-      let files;
-      try { files = clips.map(refPath); } catch (e) { return json(res, 400, { error: e.message }); }
+
+      // clips가 {ref, subtitle} 객체 배열인 경우 처리
+      let files, subtitles = [];
+      try {
+        // 첫 번째 클립 타입 확인
+        const firstClip = clips[0];
+        console.log('[merge] clips 개수:', clips.length, ', 첫 번째 타입:', typeof firstClip);
+
+        if (firstClip && typeof firstClip === 'object' && firstClip !== null && 'ref' in firstClip) {
+          // 객체 배열: { ref: string, subtitle?: string }
+          console.log('[merge] 객체 배열 모드');
+          files = clips.map((c, i) => {
+            if (!c || typeof c !== 'object' || c === null) {
+              throw new Error(`클립 ${i + 1}번이 객체가 아닙니다 (타입: ${typeof c})`);
+            }
+            if (!c.ref || typeof c.ref !== 'string') {
+              throw new Error(`클립 ${i + 1}번의 ref가 없거나 문자열이 아닙니다. 받은 값: ${JSON.stringify(c)}`);
+            }
+            return refPath(c.ref);
+          });
+          subtitles = clips.map((c) => (c && c.subtitle) || '');
+        } else if (typeof firstClip === 'string') {
+          // 문자열 배열 (하위 호환성)
+          console.log('[merge] 문자열 배열 모드');
+          files = clips.map((c, i) => {
+            if (typeof c !== 'string') {
+              throw new Error(`클립 ${i + 1}번이 문자열이 아닙니다 (타입: ${typeof c}, 값: ${JSON.stringify(c)})`);
+            }
+            return refPath(c);
+          });
+        } else {
+          throw new Error(`알 수 없는 클립 형식입니다. 첫 번째 클립 타입: ${typeof firstClip}, 값: ${JSON.stringify(firstClip)}`);
+        }
+      } catch (e) {
+        console.error('[merge] 클립 처리 오류:', e.message);
+        return json(res, 400, { error: e.message });
+      }
+
       await mkdir(DIRS.merged, { recursive: true });
       const id = randomUUID().slice(0, 8);
       const file = `team_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}_${id}.mp4`;
       const job = { id, state: 'running', progress: 0, file: null, error: null };
       mergeJobs.set(id, job);
-      console.log(`[merge ${id}] 클립 ${files.length}개 합치기 시작 (${aspect}, 전환 ${fade}초)`);
-      merge.mergeClips({ files, output: path.join(DIRS.merged, file), aspect, fade, onProgress: (r) => { job.progress = r; } })
+      console.log(`[merge ${id}] 클립 ${files.length}개 합치기 시작 (${aspect}, 전환 ${fade}초${subtitles.some((s) => s) ? ', 자막 포함' : ''})`);
+      merge.mergeClips({ files, output: path.join(DIRS.merged, file), aspect, fade, subtitles, onProgress: (r) => { job.progress = r; } })
         .then((info) => { Object.assign(job, { state: 'done', progress: 1, file, url: `/outputs/team-merged/${file}`, info }); console.log(`[merge ${id}] ✅ 완료 ${file} (${info.duration.toFixed(1)}초)`); })
         .catch((e) => { Object.assign(job, { state: 'error', error: e.message }); console.error(`[merge ${id}] ❌ ${e.message}`); });
       return json(res, 202, job);
@@ -161,6 +208,57 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && (m = p.match(/^\/api\/team\/merge\/([\w-]+)$/))) {
       const job = mergeJobs.get(m[1]);
       return job ? json(res, 200, job) : json(res, 404, { error: '작업을 찾을 수 없습니다.' });
+    }
+
+    // 합친 영상 인스타그램 게시
+    if (req.method === 'POST' && (m = p.match(/^\/api\/team\/merge\/([\w-]+)\/publish$/))) {
+      const job = mergeJobs.get(m[1]);
+      if (!job) return json(res, 404, { error: '작업을 찾을 수 없습니다.' });
+      if (job.state !== 'done') return json(res, 409, { error: '영상이 아직 완성되지 않았습니다.' });
+      if (job.publishing) return json(res, 409, { error: '이미 게시 중입니다.' });
+
+      const body = await readBody(req, 64 * 1024);
+      let caption = '';
+      if (body.length) {
+        const parsed = JSON.parse(body.toString());
+        caption = (parsed.caption || '').trim().slice(0, 2200);
+      }
+
+      job.publishing = true;
+      job.publishState = 'publishing';
+
+      // 비동기로 게시 처리
+      (async () => {
+        try {
+          const videoPath = path.join(DIRS.merged, job.file);
+          const videoBuffer = await readFile(videoPath);
+
+          // 1. 영상을 힉스필드에 업로드하여 공개 URL 얻기
+          console.log(`[merge ${job.id}] 📤 힉스필드에 영상 업로드 중...`);
+          const videoUrl = await hf.uploadVideo(videoBuffer);
+
+          // 2. 인스타그램에 게시
+          console.log(`[merge ${job.id}] 📸 인스타그램에 게시 중...`);
+          const ig = await import('./lib/instagram.mjs');
+          const result = await ig.publishReel({
+            videoUrl,
+            caption,
+            onStep: (step, msg) => console.log(`[merge ${job.id}] ${msg}`)
+          });
+
+          job.result = result;
+          job.publishState = 'done';
+          console.log(`[merge ${job.id}] ✅ 인스타 게시 완료: ${result.permalink || result.username}`);
+        } catch (e) {
+          job.publishError = e.message;
+          job.publishState = 'error';
+          console.error(`[merge ${job.id}] ❌ 인스타 게시 실패: ${e.message}`);
+        } finally {
+          job.publishing = false;
+        }
+      })();
+
+      return json(res, 202, { state: 'publishing', message: '인스타그램에 게시 중...' });
     }
 
     if (req.method === 'GET' && (m = p.match(/^\/api\/jobs\/([\w-]+)$/))) {
